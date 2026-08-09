@@ -1,5 +1,4 @@
 const { ENV, watchdogHostWarning, WATCHDOG_MIN_INTERVAL_MS } = require("./preflight.js")
-// dotenv swallows a read error instead of throwing, and every setting would then read as unset
 const { error: envError } = require("dotenv").config({ path: ENV })
 const fs = require("fs")
 const os = require("os")
@@ -20,7 +19,6 @@ const NOTHING_TO_POLL = "no service has both *_ON=true and *_PROXY_ON=true — n
 const NO_HOST = "gateway_HOST is empty — every health URL would be a relative path that fetch cannot parse, so every poll would read as an outage and reboot a healthy host"
 const unreadableEnv = ({ code, message }) => `cannot read ${ENV} (${code ?? message}) and watchdog_ON is not set in the environment either — every setting reads as unset, and the watchdog would exit clean while polling nothing`
 
-// only services that run here: a reboot of this host cannot fix an off-box one
 const checkUrl = () => healthChecks({ localOnly: true })
 
 // dotenv never overrides an already-set variable, so a systemd Environment= or an exported shell var wins over .env.
@@ -102,8 +100,6 @@ const act = async (stage, failed) => {
 	return stage === "reboot" ? reboot() : restart()
 }
 
-// one healthy poll after a restart proves nothing — a fault the restart only masked (a wedged
-// bridge, an exhausted conntrack table) would reset the stage and never reach the reboot that clears it
 const recover = (state, threshold) => {
 	if (state.failures) console.log("watchdog: healthy again, failure count reset")
 	const healthy = (state.healthy || 0) + 1
@@ -121,13 +117,9 @@ const runOnce = async () => {
 	const failures = state.failures + 1
 	console.log(`watchdog: ${failures}/${threshold} consecutive failures — ${failed.join(", ")}`)
 	if (failures < threshold) return writeState({ ...state, failures, healthy: 0 })
-	// only a total outage is a host-level fault. One slow service (object inference can outrun the
-	// 10s timeout under load) gets the stack restarted, but never takes the whole machine down
 	const total = failed.length === Object.keys(urls).length
 	const stage = total ? STAGES[state.stage] || STAGES[0] : STAGES[0]
-	// committed before the action, so a reboot that cuts this process off still comes back on the restart stage
 	await writeState({ failures: 0, healthy: 0, stage: total ? nextStage(state.stage) : state.stage })
-	// a restart the daemon refused left the stack untouched, so the next threshold must not reboot over it
 	if (!await act(stage, failed)) await writeState({ failures: 0, healthy: 0, stage: state.stage })
 }
 
@@ -146,8 +138,6 @@ const dryRun = () => {
 	console.log(Object.values(checkUrl()).join("\n") || NOTHING_TO_POLL)
 }
 
-// Each of these would otherwise look like a clean run while nothing is polled, or fail every poll on a
-// healthy host. An enabled watchdog that cannot do its job has to say so and exit 1, not exit 0 quietly.
 const envProblem = (error = envError, env = process.env) => error && !env.watchdog_ON ? unreadableEnv(error) : null
 
 const configProblem = () =>

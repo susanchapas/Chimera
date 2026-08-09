@@ -262,8 +262,6 @@ const cookieAmbiguousHostWarning = (lines) =>
 		? "WARNING: gateway_HOST has no scheme, so it reads as https://. If browsers reach this deploy over http://, the login loops forever. Give gateway_HOST an explicit http:// prefix"
 		: null
 
-// a name no public CA issues for: an IP literal, a single label, or a private-use suffix.
-// The certificate behind it is self-signed or from a private CA, which node's fetch rejects.
 const PRIVATE_SUFFIX = /\.(lan|local|internal|intranet|home\.arpa)$/i
 const privateHostname = (host) => !!host && (isIpLiteral(host) || !host.includes(".") || PRIVATE_SUFFIX.test(host))
 

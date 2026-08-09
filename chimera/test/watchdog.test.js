@@ -65,8 +65,6 @@ describe("health endpoints", () => {
 		process.env.object_PROXY_ON = "true"
 	})
 
-	// _PROXY_ON alone says the gateway routes it, not that it runs here — rebooting this host
-	// cannot bring an off-box service back, so it would reboot forever while the fault sits elsewhere
 	test("an off-box service the gateway proxies is not polled", () => {
 		process.env.storage_ON = "false"
 		expect(Object.keys(checkUrl())).not.toContain("storage")
