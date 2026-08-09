@@ -29,6 +29,16 @@ describe("composeArgs", () => {
 		expect(composeArgs([], ["up", "-d"])).toEqual(["up", "-d", "--scale", "certbot=0"])
 	})
 
+	// dotenv never overwrites an already-set variable, so a systemd Environment= beats .env everywhere
+	// else. Reading the file alone here removed certbot on every watchdog restart and stopped renewal
+	test("process.env wins over the .env file, the same precedence the rest of the watchdog path uses", () => {
+		process.env.certbot_ON = "true"
+		expect(composeArgs(lines({ certbot_ON: "false" }), ["up", "-d"])).toEqual(["up", "-d"])
+		process.env.certbot_ON = "false"
+		expect(composeArgs(lines({ certbot_ON: "true" }), ["up", "-d"])).toEqual(["up", "-d", "--scale", "certbot=0"])
+		delete process.env.certbot_ON
+	})
+
 	test("other commands pass through untouched — --scale is only valid on up", () => {
 		expect(composeArgs(lines({ certbot_ON: "false" }), ["down"])).toEqual(["down"])
 		expect(composeArgs(lines({ certbot_ON: "false" }), ["logs", "-f"])).toEqual(["logs", "-f"])

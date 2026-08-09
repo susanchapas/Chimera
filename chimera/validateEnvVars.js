@@ -1,7 +1,7 @@
 require("dotenv").config()
 const fs = require("fs")
 const path = require("path")
-const { parseSchema, isServiceOff, typeOf, isSecret, objectFeedProblem, insecureCookie, cookieSecureProblem, cookiePlainHttpProblem, cookieAmbiguousHostWarning, redirectWarnings, certbotPortProblem, duplicatePortProblems, hashTruncated } = require("./preflight.js")
+const { parseSchema, isServiceOff, typeOf, isSecret, objectFeedProblem, insecureCookie, cookieSecureProblem, cookiePlainHttpProblem, cookieAmbiguousHostWarning, warnings, certbotPortProblem, duplicatePortProblems, hashTruncated } = require("./preflight.js")
 const { multiInstance, validInstances } = require("../lib/utils/multiInstance.js")
 const { validTrustedSources } = require("../lib/utils/trustedSources.js")
 const gatewayHost = require("../lib/utils/gatewayHost.js")
@@ -178,7 +178,7 @@ if (process.env.certbot_ON === "true" && process.env.gateway_HTTPS_Redirect !== 
 	console.log("WARNING: certbot_ON=true but gateway_HTTPS_Redirect is not true — port 80 keeps serving the whole app. Passwords cross the network in cleartext, and the browser drops the Secure cookie, so the login fails and says nothing")
 }
 
-redirectWarnings(envLines).forEach(w => console.log(w))
+warnings(envLines).forEach(w => console.log(w))
 
 const LOOPBACK = ["localhost", "127.0.0.1", "::1", "[::1]"]
 const originOf = (url) => { try { return new URL(url).host } catch { return "" } }

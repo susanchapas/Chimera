@@ -214,7 +214,9 @@ Your first successful login leaves a second cookie in that browser for a year. I
 <details>
 <summary><b>Watchdog</b></summary>
 
-[chimera/watchdog.js](chimera/watchdog.js) runs on the host, outside Docker, polling the same gateway health endpoints as the in-container heartbeat. After `watchdog_FAILURES` consecutive failed polls it alerts and brings the stack back up; if the failures keep coming it reboots the host, then cycles back to the restart. It never powers the machine off, and cannot rescue a kernel hang.
+[chimera/watchdog.js](chimera/watchdog.js) runs on the host, outside Docker, polling the gateway health endpoints of the services that run on this host. After `watchdog_FAILURES` consecutive failed polls it alerts and brings the stack back up; if every endpoint keeps failing it reboots the host, then cycles back to the restart. A partial outage only ever restarts the stack — one slow service does not take the machine down. It never powers the machine off, and cannot rescue a kernel hang.
+
+A service with `<name>_PROXY_ON=true` but `<name>_ON=false` runs on another box: the gateway proxies it, but no restart or reboot here can fix it, so the watchdog leaves it to the heartbeat.
 
 ```
 watchdog_ON = true            # off by default

@@ -16,15 +16,20 @@ jest.mock("../../lib/utils/jsonFileHandling.js", () => ({
 	}
 }))
 
+const SERVICES = ["command", "livestream", "object", "schedule", "storage"]
+
 process.env.gateway_HOST = "http://127.0.0.1:8080"
 process.env.watchdog_FAILURES = "3"
-for (const s of ["command", "livestream", "object", "schedule", "storage"]) process.env[`${s}_PROXY_ON`] = "true"
+for (const s of SERVICES) {
+	process.env[`${s}_ON`] = "true"
+	process.env[`${s}_PROXY_ON`] = "true"
+}
 
 const { spawnSync } = require("child_process")
 const { runCompose } = require("../compose.js")
 const webhookAlert = require("../../lib/utils/webhookAlert.js")
 const { WATCHDOG_MIN_INTERVAL_MS, watchdogHostWarning } = require("../preflight.js")
-const { checkUrl, envLines, settings, rebootCommand, privileged, nextStage, runOnce, restart, reboot, STAGES } = require("../watchdog.js")
+const { checkUrl, configProblem, envProblem, envLines, settings, rebootCommand, privileged, nextStage, runOnce, restart, reboot, STAGES, NO_HOST, NOTHING_TO_POLL } = require("../watchdog.js")
 
 const healthy = () => Promise.resolve({ ok: true, status: 200 })
 const down = () => Promise.resolve({ ok: false, status: 502 })
@@ -60,7 +65,16 @@ describe("health endpoints", () => {
 		process.env.object_PROXY_ON = "true"
 	})
 
-	test("the heartbeat and the watchdog read the same map", () => {
+	// _PROXY_ON alone says the gateway routes it, not that it runs here — rebooting this host
+	// cannot bring an off-box service back, so it would reboot forever while the fault sits elsewhere
+	test("an off-box service the gateway proxies is not polled", () => {
+		process.env.storage_ON = "false"
+		expect(Object.keys(checkUrl())).not.toContain("storage")
+		expect(Object.keys(require("../../lib/utils/healthChecks.js")())).toContain("storage")
+		process.env.storage_ON = "true"
+	})
+
+	test("the heartbeat watches everything proxied, the watchdog only what runs here", () => {
 		expect(require("../../lib/utils/healthChecks.js")()).toEqual(checkUrl())
 	})
 })
@@ -220,16 +234,55 @@ describe("runOnce", () => {
 		expect(webhookAlert.mock.calls[1][0]).toMatch(/rebooting the host/)
 	})
 
-	test("a healthy poll resets the count and the escalation stage", async () => {
+	test("a healthy poll resets the count", async () => {
 		await runOnce()
 		await runOnce()
 		global.fetch = jest.fn(healthy)
 		await runOnce()
-		expect(mockState).toEqual({ failures: 0, stage: 0 })
+		expect(mockState).toMatchObject({ failures: 0, stage: 0 })
 
 		global.fetch = jest.fn(down)
 		await failUntilThreshold()
 		expect(runCompose).toHaveBeenCalledWith(["up", "-d", "--force-recreate"])
+		expect(spawnSync).not.toHaveBeenCalled()
+	})
+
+	// a fault a restart papers over for a minute would reset the stage on the first healthy poll and
+	// restart forever, never reaching the reboot that clears it
+	test("one healthy poll does not clear the escalation stage — a full threshold of them does", async () => {
+		await failUntilThreshold()
+		expect(mockState.stage).toBe(1)
+
+		global.fetch = jest.fn(healthy)
+		await runOnce()
+		expect(mockState.stage).toBe(1)
+
+		global.fetch = jest.fn(down)
+		await failUntilThreshold()
+		expect(spawnSync).toHaveBeenCalledTimes(1)
+
+		global.fetch = jest.fn(healthy)
+		for (let i = 0; i < 3; i++) await runOnce()
+		expect(mockState).toMatchObject({ failures: 0, stage: 0 })
+	})
+
+	// the stage was committed before the action ran, so a stack that was never restarted promoted itself to reboot
+	test("a restart the daemon refused does not promote the next escalation to reboot", async () => {
+		runCompose.mockReturnValue({ status: 1 })
+		await failUntilThreshold()
+		expect(mockState.stage).toBe(0)
+
+		await failUntilThreshold()
+		expect(runCompose).toHaveBeenCalledTimes(2)
+		expect(spawnSync).not.toHaveBeenCalled()
+		runCompose.mockReturnValue({ status: 0 })
+	})
+
+	// /object/health answers in-band with inference and can outrun the 10s timeout under load
+	test("a partial outage restarts the stack but never reboots the host", async () => {
+		global.fetch = jest.fn((url) => (url.includes("/object/") ? down() : healthy()))
+		for (let i = 0; i < 9; i++) await runOnce()
+		expect(runCompose).toHaveBeenCalledTimes(3)
 		expect(spawnSync).not.toHaveBeenCalled()
 	})
 
@@ -251,6 +304,57 @@ describe("runOnce", () => {
 		global.fetch = jest.fn(() => Promise.reject(new Error("ECONNREFUSED")))
 		await failUntilThreshold()
 		expect(runCompose).toHaveBeenCalledWith(["up", "-d", "--force-recreate"])
+	})
+})
+
+describe("configProblem", () => {
+	afterEach(() => {
+		process.env.gateway_HOST = "http://127.0.0.1:8080"
+		delete process.env.watchdog_ON
+	})
+
+	test("an enabled watchdog with a clean config has nothing to report", () => {
+		process.env.watchdog_ON = "true"
+		expect(configProblem()).toBeNull()
+	})
+
+	// normalizeHost("") returns "", so every URL would be "/command/health", which fetch cannot parse.
+	// Every poll would then "fail" and the watchdog would restart and reboot a host that is fine
+	test("an empty gateway_HOST is a startup error, not six failed polls", () => {
+		process.env.watchdog_ON = "true"
+		process.env.gateway_HOST = ""
+		expect(configProblem()).toBe(NO_HOST)
+	})
+
+	test("polling nothing is a startup error too — the host would look supervised while nothing is watched", () => {
+		process.env.watchdog_ON = "true"
+		for (const s of SERVICES) process.env[`${s}_PROXY_ON`] = "false"
+		expect(configProblem()).toBe(NOTHING_TO_POLL)
+		for (const s of SERVICES) process.env[`${s}_PROXY_ON`] = "true"
+	})
+
+	test("a disabled watchdog reports nothing — there is nothing to misconfigure", () => {
+		process.env.watchdog_ON = "false"
+		process.env.gateway_HOST = ""
+		expect(configProblem()).toBeNull()
+	})
+})
+
+// dotenv discards read errors, so an unreadable .env leaves every setting unset. Without this the
+// process prints "watchdog_ON is not true", exits 0, and the operator believes the host is supervised
+describe("envProblem", () => {
+	const denied = Object.assign(new Error("EACCES"), { code: "EACCES" })
+
+	test("an unreadable .env is fatal when the environment does not carry the settings either", () => {
+		expect(envProblem(denied, {})).toMatch(/cannot read .*EACCES/)
+	})
+
+	test("stays quiet when the settings arrive from the supervisor instead of the file", () => {
+		expect(envProblem(denied, { watchdog_ON: "true" })).toBeNull()
+	})
+
+	test("a readable .env is never a problem", () => {
+		expect(envProblem(null, {})).toBeNull()
 	})
 })
 

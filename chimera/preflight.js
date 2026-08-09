@@ -262,10 +262,18 @@ const cookieAmbiguousHostWarning = (lines) =>
 		? "WARNING: gateway_HOST has no scheme, so it reads as https://. If browsers reach this deploy over http://, the login loops forever. Give gateway_HOST an explicit http:// prefix"
 		: null
 
-const watchdogHostWarning = (lines) =>
-	getVal(lines, "watchdog_ON") === "true" && schemelessHost(lines)
-		? "WARNING: watchdog_ON=true and gateway_HOST has no scheme, so the watchdog polls https://. On a plain-HTTP deploy every poll fails and the watchdog reboots a healthy host on a loop — give gateway_HOST an explicit http:// or https:// prefix. If the certificate is self-signed or from a private CA, point NODE_EXTRA_CA_CERTS at it, or node's fetch rejects it"
+// a name no public CA issues for: an IP literal, a single label, or a private-use suffix.
+// The certificate behind it is self-signed or from a private CA, which node's fetch rejects.
+const PRIVATE_SUFFIX = /\.(lan|local|internal|intranet|home\.arpa)$/i
+const privateHostname = (host) => !!host && (isIpLiteral(host) || !host.includes(".") || PRIVATE_SUFFIX.test(host))
+
+const watchdogHostWarning = (lines) => {
+	if (getVal(lines, "watchdog_ON") !== "true") return null
+	if (schemelessHost(lines)) return "WARNING: watchdog_ON=true and gateway_HOST has no scheme, so the watchdog polls https://. On a plain-HTTP deploy every poll fails and the watchdog reboots a healthy host on a loop — give gateway_HOST an explicit http:// or https:// prefix. If the certificate is self-signed or from a private CA, point NODE_EXTRA_CA_CERTS at it, or node's fetch rejects it"
+	return urlPart(gatewayUrl(lines), "protocol") === "https:" && privateHostname(urlPart(gatewayUrl(lines), "hostname"))
+		? "WARNING: watchdog_ON=true and gateway_HOST is https:// on a name no public CA issues for, so the certificate is self-signed or from a private CA. Node's fetch rejects it (UNABLE_TO_VERIFY_LEAF_SIGNATURE) on every poll, and the watchdog restarts the stack and then reboots a healthy host on a loop — point NODE_EXTRA_CA_CERTS at the CA that signed it"
 		: null
+}
 
 const configuredCertPair = (lines) => {
 	const [key, cert] = ["privateKey_FILEPATH", "certificate_FILEPATH"].map(k => getVal(lines, k) || "")
@@ -625,4 +633,4 @@ if (require.main === module) {
 	else runInteractive()
 }
 
-module.exports = { WATCHDOG_MIN_INTERVAL_MS, parseSchema, typeOf, isSecret, varProblem, cameraProblems, isServiceOff, blankDisables, objectFeedProblem, insecureCookie, cookieSecureProblem, cookiePlainHttpProblem, cookieAmbiguousHostWarning, httpsRedirectLoopWarning, certUnreadableWarning, httpsRedirectPortWarning, redirectWarnings, watchdogHostWarning, certbotPortProblem, duplicatePortProblems, setupTokenHint, answerProblem, envProblems, hashTruncated, runInteractive, runCheck, ROOT, ENV, readLines, getVal, setVal, looseMode, confModeProblem, motionDirProblem }
+module.exports = { WATCHDOG_MIN_INTERVAL_MS, parseSchema, typeOf, isSecret, varProblem, cameraProblems, isServiceOff, blankDisables, objectFeedProblem, insecureCookie, cookieSecureProblem, cookiePlainHttpProblem, cookieAmbiguousHostWarning, httpsRedirectLoopWarning, certUnreadableWarning, httpsRedirectPortWarning, warnings, watchdogHostWarning, certbotPortProblem, duplicatePortProblems, setupTokenHint, answerProblem, envProblems, hashTruncated, runInteractive, runCheck, ROOT, ENV, readLines, getVal, setVal, looseMode, confModeProblem, motionDirProblem }
