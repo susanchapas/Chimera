@@ -88,7 +88,7 @@ const restart = () => {
 }
 
 const readState = () => new Promise(resolve =>
-	readJSON(STATE_FILE, (_, data) => resolve({ failures: 0, stage: 0, ...data })))
+	readJSON(STATE_FILE, (_, data) => resolve({ failures: 0, healthy: 0, stage: 0, ...data })))
 
 const writeState = (state) => new Promise(resolve => writeJSON(STATE_FILE, state, resolve, ({ message }) => {
 	fail(`watchdog: cannot write ${STATE_FILE} (${message}) — the failure count cannot survive this run, so the watchdog will never reach its threshold`)
@@ -100,9 +100,11 @@ const act = async (stage, failed) => {
 	return stage === "reboot" ? reboot() : restart()
 }
 
+const resetCounts = (stage) => writeState({ failures: 0, healthy: 0, stage })
+
 const recover = (state, threshold) => {
 	if (state.failures) console.log("watchdog: healthy again, failure count reset")
-	const healthy = (state.healthy || 0) + 1
+	const healthy = state.healthy + 1
 	const cleared = healthy >= threshold
 	if (cleared && state.stage) console.log(`watchdog: ${healthy} healthy polls in a row, escalation reset to ${STAGES[0]}`)
 	return writeState({ failures: 0, healthy: cleared ? 0 : healthy, stage: cleared ? 0 : state.stage })
@@ -118,9 +120,9 @@ const runOnce = async () => {
 	console.log(`watchdog: ${failures}/${threshold} consecutive failures — ${failed.join(", ")}`)
 	if (failures < threshold) return writeState({ ...state, failures, healthy: 0 })
 	const total = failed.length === Object.keys(urls).length
-	const stage = total ? STAGES[state.stage] || STAGES[0] : STAGES[0]
-	await writeState({ failures: 0, healthy: 0, stage: total ? nextStage(state.stage) : state.stage })
-	if (!await act(stage, failed)) await writeState({ failures: 0, healthy: 0, stage: state.stage })
+	const stage = (total && STAGES[state.stage]) || STAGES[0]
+	await resetCounts(total ? nextStage(state.stage) : state.stage)
+	if (!await act(stage, failed)) await resetCounts(state.stage)
 }
 
 const loop = async () => {
@@ -140,18 +142,20 @@ const dryRun = () => {
 
 const envProblem = (error = envError, env = process.env) => error && !env.watchdog_ON ? unreadableEnv(error) : null
 
-const configProblem = () =>
-	envProblem() ? envProblem()
-		: !settings().enabled ? null
-			: !gatewayHost() ? NO_HOST
-				: !Object.keys(checkUrl()).length ? NOTHING_TO_POLL
-					: null
+const configProblem = () => {
+	const unreadable = envProblem()
+	if (unreadable) return unreadable
+	if (!settings().enabled) return null
+	if (!gatewayHost()) return NO_HOST
+	return Object.keys(checkUrl()).length ? null : NOTHING_TO_POLL
+}
 
 if (require.main === module) {
 	const hostWarning = watchdogHostWarning(envLines())
 	if (hostWarning) console.warn(hostWarning)
-	const problem = configProblem()
-	if (process.argv.includes("--dry-run")) dryRun()
+	const dry = process.argv.includes("--dry-run")
+	const problem = dry ? null : configProblem()
+	if (dry) dryRun()
 	else if (problem) fail(problem)
 	else if (!settings().enabled) console.log("watchdog_ON is not true — nothing to do")
 	else (process.argv.includes("--once") ? runOnce() : loop()).catch(({ message }) => fail(message))
